@@ -1,9 +1,12 @@
 from typing import Any, List
 import os
 
-configfile: "config_2022.yaml"
-ITER_TOOLS = ['bwa', 'minimap', 'pilon', 'racon']
-ITERS = list(range(1, 5))
+configfile: "config.yaml"
+
+ITER_TOOLS = config['polish_rounds'].copy()
+del ITER_TOOLS['flye']
+ITER_TOOLS['minimap'] = ITER_TOOLS['racon']
+ITER_TOOLS['bwa'] = ITER_TOOLS['pilon']
 
 def racon_input(wildcards)->str:
     global config
@@ -57,17 +60,18 @@ for strain in config['strains'].keys():
     os.makedirs(os.path.join(config['out_dir'], f'{strain}'), exist_ok=True)
     os.makedirs(os.path.join(config['out_dir'], f'{strain}', 'medaka'), exist_ok=True)
     tool: str
-    for tool in ITER_TOOLS:
+    for tool in ITER_TOOLS.keys():
         it: int
-        for it in ITERS:
+        for it in range(1, ITER_TOOLS[tool] + 1):
             os.makedirs(os.path.join(config['out_dir'], f'{strain}', tool, f'iteration_{it}'), exist_ok=True)
 
 
 rule all:
     input:
-        expand("{outdir}/{strain}/sortpred/predicted_sortase.csv",
-               outdir=config['out_dir'],
-               strain=config['strains'])
+#        expand("{outdir}/{strain}/busco/short_summary.{strain}.txt",
+        expand("{outdir}/{strain}/cry_processor/raw_full_{strain}.fasta",
+               outdir = config['out_dir'],
+               strain = config['strains'])
     output: touch('.status')
 
 
@@ -78,7 +82,7 @@ rule assemble_flye:
         "{outdir}/{strain}/flye/assembly.fasta"
     params:
         outdir = "{outdir}/{strain}/flye",
-        polish_rounds = config['polish_rounds']
+        polish_rounds = config['polish_rounds']['flye']
     threads: 72
     shell:
         "mkdir -p {params.outdir} && \
@@ -101,7 +105,7 @@ rule racon_polish:
         minimap_dir = "{outdir}/{strain}/minimap2/iteration_{n}",
         racon_dir = "{outdir}/{strain}/racon/iteration_{n}"
     wildcard_constraints:
-        n = "[1-4]"
+        n = f"[1-{ITER_TOOLS['racon']}]"
     threads: 72
     shell:
         "mkdir -p {params.minimap_dir} && \
@@ -160,7 +164,7 @@ rule pilon_polish:
             bwa_dir = "{outdir}/{strain}/bwa/iteration_{n}",
             pilon_dir = "{outdir}/{strain}/pilon/iteration_{n}"
         wildcard_constraints:
-            n = "[1-4]"
+            n = f"[1-{ITER_TOOLS['pilon']}]"
         threads: 72
         shell:
             "mkdir -p {params.bwa_dir} && \
@@ -188,14 +192,15 @@ rule pilon_polish:
              pilon \
                --genome {input.ref} \
                --frags {output.bwa}.bam \
-               --outdir {params.pilon_dir}"
+               --outdir {params.pilon_dir} && \
+             sed -i 's/_pilon//g' {output.pilon}"
 
 
 rule prokka:
     input:
         contigs = "{outdir}/{strain}/pilon/iteration_4/pilon.fasta",
-        model = config['prodigal_model'],
-        ref_prot = config['reference_proteins']
+        model = config['prokka']['prodigal_model'],
+        ref_prot = config['prokka']['reference_proteins']
     output:
         "{outdir}/{strain}/prokka/{strain}.faa"
     params:
@@ -224,6 +229,8 @@ rule idops:
     params:
          out_dir = "{outdir}/{strain}/idops"
     threads: 72
+    conda:
+       "/home/yura/anaconda3/envs/idops.yaml"
     shell:
         "idops \
           -o {params.out_dir} \
@@ -235,7 +242,7 @@ rule phigaro:
     input:
         "{outdir}/{strain}/pilon/iteration_4/pilon.fasta"
     output:
-        "{outdir}/{strain}/phigaro/pilon.phigaro.tsv"
+        "{outdir}/{strain}/phigaro/pilon.tsv"
     params:
          out_dir = "{outdir}/{strain}/phigaro"
     conda:
@@ -260,7 +267,7 @@ rule sortpred_prep:
     threads:
         72
     shell:
-        "./lengthFilter.py \
+        "lengthFilter.py \
            -i {input} \
            -o {output}"
 
@@ -273,8 +280,8 @@ rule sortpred:
     params:
         script = "/home/yura/bacillus_pangenomics/SortPred_standalone/server.R",
         out_dir = "{outdir}/{strain}/sortpred",
-        model1 = config['sp_model1'],
-        model2 = config['sp_model2']
+        model1 = config['sortpred']['model1'],
+        model2 = config['sortpred']['model2']
     conda:
         "/home/yura/anaconda3/envs/R_bacillus.yaml"
     shell:
@@ -283,3 +290,126 @@ rule sortpred:
             --layer2 {params.model2} \
             -i {input} \
             -o {params.out_dir}"
+
+
+rule antismash:
+    input:
+        "{outdir}/{strain}/pilon/iteration_4/pilon.fasta"
+    output:
+        "{outdir}/{strain}/antismash/{strain}.gbk"
+    params:
+        out_dir = "{outdir}/{strain}/antismash",
+        features = "{outdir}/{strain}/prokka/{strain}.gff",
+        strain = lambda wildcards: wildcards.strain
+    threads: 72
+    conda:
+        "/home/yura/anaconda3/envs/antismash.yaml"
+    shell:
+        "antismash \
+          --cb-knownclusters \
+          --fullhmmer \
+          --cpus {threads} \
+          --output-basename {params.strain} \
+          --output-dir {params.out_dir} \
+          --genefinding-gff3 {params.features} \
+          {input}"
+
+
+rule deepbgc:
+    input:
+        "{outdir}/{strain}/pilon/iteration_4/pilon.fasta"
+    output:
+        "{outdir}/{strain}/deepbgc/README.txt"
+    params:
+        out_dir = "{outdir}/{strain}/deepbgc",
+        score = config['deepbgc_score']
+    conda:
+        "/home/yura/anaconda3/envs/deepbgc.yaml"
+    shell:
+        "export DEEPBGC_DOWNLOADS_DIR=`pwd`/deepdata ; \
+        mkdir `pwd`/deepdata && \
+        deepbgc download ; \
+        deepbgc pipeline \
+          -o {params.out_dir} \
+          -s {params.score} \
+          {input}"
+
+
+rule eggnog:
+    input:
+        "{outdir}/{strain}/prokka/{strain}.faa"
+    output:
+        "{outdir}/{strain}/eggnog/{strain}.emapper.annotations"
+    params:
+        data = config['eggnog']['data'],
+        evalue = config['eggnog']['evalue'],
+        pident = config['eggnog']['pident'],
+        out_dir = "{outdir}/{strain}/eggnog",
+        strain = lambda wildcards: wildcards.strain,
+        tool = config['eggnog']['tool']
+    conda:
+        "/home/yura/anaconda3/envs/eggnog.yaml"
+    threads: 72
+    shell:
+        "mkdir {params.data} && \
+         download_eggnog_data.py \
+            --data_dir {params.data} \
+           -P \
+           -M \
+           -H \
+           -d 2 \
+           -y \
+           -f ; \
+         emapper.py \
+           --cpu {threads} \
+           --override \
+           --data_dir {params.data} \
+           -i {input} \
+           --itype proteins \
+           --pident {params.pident} \
+           --evalue {params.evalue} \
+           --output {params.strain} \
+           --output_dir {params.out_dir}"
+
+rule cry_processor:
+    input:
+        "{outdir}/{strain}/prokka/{strain}.faa"
+    output:
+        "{outdir}/{strain}/cry_processor/raw_full_{strain}.fasta"
+    params:
+        all_domains = 1 if config['cry_processor']['all_domains'] else 2,
+        mode = config['cry_processor']['mode'],
+        out_dir = "{outdir}/{strain}/cry_processor"
+    threads: 72
+    shell:
+        "cry_processor.py \
+          --annotate \
+          --force \
+          -fi {input} \
+          -pr {params.all_domains} \
+          -r {params.mode} \
+          -od {params.out_dir}"
+
+
+#rule busco:
+#    input:
+#        "{outdir}/{strain}/prokka/{strain}.faa"
+#    output:
+#        directory("{outdir}/{strain}/busco")
+#    params:
+#        evalue = config['busco']['evalue'],
+#        lineage = config['busco']['lineage'],
+#        strain = lambda wildcards: wildcards.strain
+#    conda:
+#        "/home/yura/anaconda3/envs/busco.yaml"
+#    threads: 72
+#    shell:
+#        "busco \
+#          --force \
+#          --out_path {output} \
+#          -c {threads} \
+#          -e {params.evalue} \
+#          -i {input} \
+#          -l {params.lineage} \
+#          -m prot \
+#          -o {params.strain}"
