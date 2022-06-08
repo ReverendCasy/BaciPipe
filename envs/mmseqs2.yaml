@@ -1,0 +1,25 @@
+name: mmseqs2
+channels:
+  - r
+  - defaults
+  - conda-forge
+  - bioconda
+dependencies:
+  - _libgcc_mutex=0.1=conda_forge
+  - _openmp_mutex=4.5=2_kmp_llvm
+  - bzip2=1.0.8=h7b6447c_0
+  - ca-certificates=2022.4.26=h06a4308_0
+  - gawk=5.1.0=h7b6447c_0
+  - libgcc-ng=12.1.0=h8d9b700_16
+  - libidn2=2.3.2=h7f8727e_0
+  - libnsl=2.0.0=h7f98852_0
+  - libstdcxx-ng=11.2.0=h1234567_1
+  - libunistring=0.9.10=h27cfd23_0
+  - libzlib=1.2.12=h166bdaf_0
+  - llvm-openmp=14.0.4=he0ac6c6_0
+  - mmseqs2=13.45111=pl5321hf1761c0_2
+  - openssl=1.1.1o=h7f8727e_0
+  - perl=5.32.1=2_h7f98852_perl5
+  - wget=1.21.3=h0b77cf5_0
+  - zlib=1.2.12=h166bdaf_0
+prefix: /home/yura/anaconda3/envs/mmseqs2
