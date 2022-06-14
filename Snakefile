@@ -71,6 +71,24 @@ rule all:
 #        expand("{outdir}/{strain}/busco/short_summary.{strain}.txt",
         expand("{outdir}/{strain}/cry_processor/raw_full_{strain}.fasta",
                outdir = config['out_dir'],
+               strain = config['strains']),
+        expand("{outdir}/{strain}/idops/idops_scan.tsv",
+               outdir = config['out_dir'],
+               strain = config['strains']),
+        expand("{outdir}/{strain}/sortpred/predicted_sortase.csv",
+               outdir = config['out_dir'],
+               strain = config['strains']),
+        expand("{outdir}/{strain}/phigaro/pilon.phigaro.tsv",
+               outdir = config['out_dir'],
+               strain = config['strains']),
+        expand("{outdir}/{strain}/antismash/{strain}.gbk",
+               outdir = config['out_dir'],
+               strain = config['strains']),
+        expand("{outdir}/{strain}/deepbgc/README.txt",
+               outdir = config['out_dir'],
+               strain = config['strains']),
+        expand("{outdir}/{strain}/eggnog/{strain}.emapper.annotations",
+               outdir = config['out_dir'],
                strain = config['strains'])
     output: touch('.status')
 
@@ -83,7 +101,7 @@ rule assemble_flye:
     params:
         outdir = "{outdir}/{strain}/flye",
         polish_rounds = config['polish_rounds']['flye']
-    threads: 72
+    threads: config['threads']
     shell:
         "mkdir -p {params.outdir} && \
          flye \
@@ -106,7 +124,7 @@ rule racon_polish:
         racon_dir = "{outdir}/{strain}/racon/iteration_{n}"
     wildcard_constraints:
         n = f"[1-{ITER_TOOLS['racon']}]"
-    threads: 72
+    threads: config['threads']
     shell:
         "mkdir -p {params.minimap_dir} && \
          mkdir -p {params.racon_dir} && \
@@ -142,7 +160,7 @@ rule medaka:
     params:
         outdir = config['out_dir'],
         medaka_dir = "{outdir}/{strain}/medaka"
-    threads: 72
+    threads: config['threads']
     shell:
         "mkdir -p {params.medaka_dir} && \
          medaka_consensus \
@@ -165,7 +183,7 @@ rule pilon_polish:
             pilon_dir = "{outdir}/{strain}/pilon/iteration_{n}"
         wildcard_constraints:
             n = f"[1-{ITER_TOOLS['pilon']}]"
-        threads: 72
+        threads: config['threads']
         shell:
             "mkdir -p {params.bwa_dir} && \
              mkdir -p {params.pilon_dir} && \
@@ -184,7 +202,7 @@ rule pilon_polish:
                {output.bwa} \
                > {output.bwa}.bam && \
              samtools sort \
-               -@ 72 \
+               -@ config['threads'] \
                -o {output.bwa}.bam \
                {output.bwa}.bam && \
              samtools index \
@@ -208,7 +226,7 @@ rule prokka:
         prefix = lambda wildcards: wildcards.strain
     conda:
         "/home/yura/anaconda3/envs/prokka.yaml"
-    threads: 72
+    threads: config['threads']
     shell:
         "prokka \
           --addgenes \
@@ -221,6 +239,26 @@ rule prokka:
           {input.contigs}"
 
 
+rule cry_processor:
+    input:
+        "{outdir}/{strain}/prokka/{strain}.faa"
+    output:
+        "{outdir}/{strain}/cry_processor/raw_full_{strain}.fasta"
+    params:
+        all_domains = 1 if config['cry_processor']['all_domains'] else 2,
+        mode = config['cry_processor']['mode'],
+        out_dir = "{outdir}/{strain}/cry_processor"
+    threads: config['threads']
+    shell:
+        "cry_processor.py \
+          --annotate \
+          --force \
+          -fi {input} \
+          -pr {params.all_domains} \
+          -r {params.mode} \
+          -od {params.out_dir}"
+
+
 rule idops:
     input:
         "{outdir}/{strain}/prokka/{strain}.faa"
@@ -228,7 +266,7 @@ rule idops:
         "{outdir}/{strain}/idops/idops_scan.tsv"
     params:
          out_dir = "{outdir}/{strain}/idops"
-    threads: 72
+    threads: config['threads']
     conda:
        "/home/yura/anaconda3/envs/idops.yaml"
     shell:
@@ -242,12 +280,12 @@ rule phigaro:
     input:
         "{outdir}/{strain}/pilon/iteration_4/pilon.fasta"
     output:
-        "{outdir}/{strain}/phigaro/pilon.tsv"
+        "{outdir}/{strain}/phigaro/pilon.phigaro.tsv"
     params:
          out_dir = "{outdir}/{strain}/phigaro"
     conda:
         "/home/yura/anaconda3/envs/phigaro.yaml"
-    threads: 72
+    threads: config['threads']
     shell:
         "phigaro \
           -e tsv bed gff \
@@ -265,7 +303,7 @@ rule sortpred_prep:
     output:
         "{outdir}/{strain}/prokka/{strain}_short.faa"
     threads:
-        72
+        config['threads']
     shell:
         "lengthFilter.py \
            -i {input} \
@@ -301,7 +339,7 @@ rule antismash:
         out_dir = "{outdir}/{strain}/antismash",
         features = "{outdir}/{strain}/prokka/{strain}.gff",
         strain = lambda wildcards: wildcards.strain
-    threads: 72
+    threads: config['threads']
     conda:
         "/home/yura/anaconda3/envs/antismash.yaml"
     shell:
@@ -349,7 +387,7 @@ rule eggnog:
         tool = config['eggnog']['tool']
     conda:
         "/home/yura/anaconda3/envs/eggnog.yaml"
-    threads: 72
+    threads: config['threads']
     shell:
         "mkdir {params.data} && \
          download_eggnog_data.py \
@@ -371,25 +409,32 @@ rule eggnog:
            --output {params.strain} \
            --output_dir {params.out_dir}"
 
-rule cry_processor:
-    input:
-        "{outdir}/{strain}/prokka/{strain}.faa"
-    output:
-        "{outdir}/{strain}/cry_processor/raw_full_{strain}.fasta"
-    params:
-        all_domains = 1 if config['cry_processor']['all_domains'] else 2,
-        mode = config['cry_processor']['mode'],
-        out_dir = "{outdir}/{strain}/cry_processor"
-    threads: 72
-    shell:
-        "cry_processor.py \
-          --annotate \
-          --force \
-          -fi {input} \
-          -pr {params.all_domains} \
-          -r {params.mode} \
-          -od {params.out_dir}"
 
+#rule make_mmseqs2_db:
+#    input:
+#    output:
+#        directory()
+#    params:
+#    threads: config['threads']
+#    conda:
+#        "/home/yura/anaconda3/"
+#    shell:
+#        "if [[ ! -z {output} ]]
+#         then
+#             <>
+#         fi"
+
+#rule mmseqs2:
+#    input:
+#        annot_file = "{out_dir}/{strain}/prokka/{strain}.faa",
+#        annot_db = config['mmseqs2']['annot_db'] if os.path.exists(config['mmseqs2']['annot_db']) else make_mmseqs2_db.output
+#    output:
+#        "{out_dir}/{strain}/mmseqs"
+#    params:
+#    conda:
+#    threads: config['threads']
+#    shell:
+#    
 
 #rule busco:
 #    input:
@@ -402,7 +447,7 @@ rule cry_processor:
 #        strain = lambda wildcards: wildcards.strain
 #    conda:
 #        "/home/yura/anaconda3/envs/busco.yaml"
-#    threads: 72
+#    threads: config['threads']
 #    shell:
 #        "busco \
 #          --force \
